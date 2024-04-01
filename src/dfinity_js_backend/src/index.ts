@@ -30,16 +30,12 @@ import {
 import { hashCode } from "hashcode";
 import { v4 as uuidv4 } from "uuid";
 
-const Flight = Record({
+const Course = Record({
   id: text,
   name: text,
   imageUrl: text,
   description: text,
-  pricePerPerson: nat64,
-  departureFrom: text,
-  arriveTo: text,
-  departureTime: nat64,
-  seats: nat64,
+  pricePerCourse: nat64,
   isReserved: bool,
   isAvailable: bool,
   currentReservedTo: Opt(Principal),
@@ -47,15 +43,58 @@ const Flight = Record({
   creator: Principal,
 });
 
-const FlightPayload = Record({
+const CoursePayload = Record({
   name: text,
   imageUrl: text,
   description: text,
-  pricePerPerson: nat64,
-  departureFrom: text, 
-  arriveTo: text,
-  departureTime: nat64,
-  seats: nat64,
+  pricePerCourse: nat64,
+});
+
+const FlashCard = Record({
+  id: text,
+  term: text,
+  definition: text,
+  courseId: text,
+  createdAt: nat64,
+});
+
+const FlashCardPayload = Record({
+  term: text,
+  definition: text,
+  courseId: text,
+});
+
+const Quiz = Record({
+  id: text,
+  question: text,
+  options: Vec(text),
+  correctAnswer: text,
+  courseId: text,
+  createdAt: nat64,
+});
+
+const QuizPayload = Record({
+  question: text,
+  options: Vec(text),
+  correctAnswer: text,
+  courseId: text,
+});
+
+const User = Record({
+  id: text,
+  name: text,
+  email: text,
+  courses: Vec(text),
+  progress: text,
+  goals: text,
+  createdAt: nat64,
+});
+
+const UserPayload = Record({
+  name: text,
+  email: text,
+  progress: text,
+  goals: text,
 });
 
 const InitPayload = Record({
@@ -68,9 +107,9 @@ const ReservationStatus = Variant({
 });
 
 const Booking = Record({
-  flightId: text,
+  courseId: text,
   amount: nat64,
-  noOfPersons: nat64,
+  noOfCourses: nat64,
   status: ReservationStatus,
   payer: Principal,
   paid_at_block: Opt(nat64),
@@ -87,9 +126,12 @@ const Message = Variant({
   PaymentCompleted: text,
 });
 
-const flightsStorage = StableBTreeMap(0, text, Flight);
-const persistedBookings = StableBTreeMap(1, Principal, Booking);
-const pendingBookings = StableBTreeMap(2, nat64, Booking);
+const courseStorage = StableBTreeMap(0, text, Course);
+const flashcardStorage = StableBTreeMap(1, text, FlashCard);
+const quizStorage = StableBTreeMap(2, text, Quiz);
+const userStorage = StableBTreeMap(3, text, User);
+const persistedBookings = StableBTreeMap(4, Principal, Booking);
+const pendingBookings = StableBTreeMap(5, nat64, Booking);
 
 // fee to be charged upon room reservation and refunded after room is left
 let reservationFee: Opt<nat64> = None;
@@ -109,8 +151,8 @@ export default Canister({
   }),
 
   // return rooms reservation fee
-  getFlights: query([], Vec(Flight), () => {
-    return flightsStorage.values();
+  getCourses: query([], Vec(Course), () => {
+    return courseStorage.values();
   }),
 
   // return orders
@@ -124,52 +166,40 @@ export default Canister({
   }),
 
   // return a particular room
-  getFlight: query([text], Result(Flight, Message), (id) => {
-    const roomOpt = flightsStorage.get(id);
-    if ("None" in roomOpt) {
-      return Err({ NotFound: `room with id=${id} not found` });
+  getCourse: query([text], Result(Course, Message), (id) => {
+    const courseOpt = courseStorage.get(id);
+    if ("None" in courseOpt) {
+      return Err({ NotFound: `course with id=${id} not found` });
     }
-    return Ok(roomOpt.Some);
+    return Ok(courseOpt.Some);
   }),
 
+  // return rooms based on price
+  getCourseByName: query([nat64], Result(Vec(Course), Message), (name) => {
+    const filteredCourses = courseStorage
+      .values()
+      .filter((course) => course.name <= name);
+    return Ok(filteredCourses);
+  }),
 
-
-// return rooms based on price
-getFlightByPrice: query([nat64], Result(Vec(Flight), Message), (maxPrice) => {
-  const filteredFlights = flightsStorage.values().filter((flight) => flight.pricePerPerson <= maxPrice);
-  return Ok(filteredFlights);
-}),
-
-// return rooms based on departure and arrival places
-getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePlace, arrivalPlace) => {
-  const filteredFlights = flightsStorage.values().filter((flight) => 
-    flight.departureFrom.toLowerCase() === departurePlace.toLowerCase() &&
-    flight.arriveTo.toLowerCase() === arrivalPlace.toLowerCase()
-  );
-  return Ok(filteredFlights);
-}),
-
-
-
-
-// getAvailableSeats: query([text], Result(nat64, Message), (flightId) => {
-//   const flightOpt = flightsStorage.get(flightId);
-//   if ("None" in flightOpt) {
-//     return Err({ NotFound: `flight with id=${flightId} not found` });
-//   }
-//   const flight = flightOpt.Some;
-//   const bookedSeats = persistedBookings.values().filter((booking) => booking.flightId === flightId).reduce((total, booking) => total + booking.noOfPersons, 0);
-//   const availableSeats = flight.seats - bookedSeats;
-//   return Ok(availableSeats);
-// }),  
-
+  // return rooms based on price
+  getCourseByDescription: query(
+    [nat64],
+    Result(Vec(Course), Message),
+    (description) => {
+      const filteredCourses = courseStorage
+        .values()
+        .filter((course) => course.description <= description);
+      return Ok(filteredCourses);
+    }
+  ),
 
   // add new room
-  addFlight: update([FlightPayload], Result(Flight, Message), (payload) => {
+  addCourse: update([CoursePayload], Result(Course, Message), (payload) => {
     if (typeof payload !== "object" || Object.keys(payload).length === 0) {
       return Err({ NotFound: "invalid payoad" });
     }
-    const flight = {
+    const course = {
       id: uuidv4(),
       isReserved: false,
       isAvailable: true,
@@ -178,43 +208,44 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
       creator: ic.caller(),
       ...payload,
     };
-    flightsStorage.insert(flight.id, flight);
-    return Ok(flight);
+    courseStorage.insert(course.id, course);
+    return Ok(course);
   }),
 
-  // delete flight
-  deleteFlight: update([text], Result(text, Message), (id) => {
-    // check flight before deleting
-    const flightOpt = flightsStorage.get(id);
-    if ("None" in flightOpt) {
+
+  // delete course
+  deleteCourse: update([text], Result(text, Message), (id) => {
+    // check course before deleting
+    const courseOpt = courseStorage.get(id);
+    if ("None" in courseOpt) {
       return Err({
-        NotFound: `cannot delete the flight: flight with id=${id} not found`,
+        NotFound: `cannot delete the course: course with id=${id} not found`,
       });
     }
 
-    if (flightOpt.Some.creator.toString() !== ic.caller().toString()) {
-      return Err({ NotOwner: "only creator can delete flight" });
+    if (courseOpt.Some.creator.toString() !== ic.caller().toString()) {
+      return Err({ NotOwner: "only creator can delete course" });
     }
 
-    if (flightOpt.Some.isReserved) {
+    if (courseOpt.Some.isReserved) {
       return Err({
-        Booked: `flight with id ${id} is currently booked`,
+        Booked: `course with id ${id} is currently booked`,
       });
     }
-    const deletedRoomOpt = flightsStorage.remove(id);
+    const deletedCourseOpt = courseStorage.remove(id);
 
-    return Ok(deletedRoomOpt.Some.id);
+    return Ok(deletedCourseOpt.Some.id);
   }),
 
   // create order for room reservation
   createReservationOrder: update(
     [text, nat64],
     Result(Booking, Message),
-    (id, noOfPersons) => {
-      const flightOpt = flightsStorage.get(id);
-      if ("None" in flightOpt) {
+    (id, noOfCourses) => {
+      const courseOpt = courseStorage.get(id);
+      if ("None" in courseOpt) {
         return Err({
-          NotFound: `cannot create the booking: flight=${id} not found`,
+          NotFound: `cannot create the booking: course=${id} not found`,
         });
       }
 
@@ -224,23 +255,23 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
         });
       }
 
-      const flight = flightOpt.Some;
+      const course = courseOpt.Some;
 
-      if (flight.isReserved) {
+      if (course.isReserved) {
         return Err({
-          Booked: `flight with id ${id} is currently booked`,
+          Booked: `course with id ${id} is currently booked`,
         });
       }
 
       // calculate total amount to be spent plus reservation fee
       let amountToBePaid =
-        noOfPersons * flight.pricePerPerson + reservationFee.Some;
+      noOfCourses * course.pricePerCourse + reservationFee.Some;
 
       // generate order
       const booking = {
-        flightId: flight.id,
+        courseId: course.id,
         amount: amountToBePaid,
-        noOfPersons,
+        noOfCourses,
         status: { PaymentPending: "PAYMENT_PENDING" },
         payer: ic.caller(),
         paid_at_block: None,
@@ -259,14 +290,14 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
   completeReservation: update(
     [text, nat64, nat64, nat64],
     Result(Booking, Message),
-    async (id, noOfPersons, block, memo) => {
+    async (id, noOfCourses, block, memo) => {
       // get room
-      const flightOpt = flightsStorage.get(id);
-      if ("None" in flightOpt) {
-        throw Error(`flight with id=${id} not found`);
+      const courseOpt = courseStorage.get(id);
+      if ("None" in courseOpt) {
+        throw Error(`course with id=${id} not found`);
       }
 
-      const flight = flightOpt.Some;
+      const course = courseOpt.Some;
 
       // check reservation fee is set
       if ("None" in reservationFee) {
@@ -276,7 +307,7 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
       }
 
       // calculate total amount to be spent plus reservation fee
-      let amount = noOfPersons * flight.pricePerPerson + reservationFee.Some;
+      let amount = noOfCourses * course.pricePerCourse + reservationFee.Some;
 
       // check payments
       const paymentVerified = await verifyPaymentInternal(
@@ -310,14 +341,14 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
       let durationInMins = BigInt(60 * 1000000000);
 
       // get updated record
-      const updatedFlight = {
-        ...flight,
+      const updatedcourse = {
+        ...course,
         currentReservedTo: Some(ic.caller()),
         isReserved: true,
         currentReservationEnds: Some(ic.time() + durationInMins),
       };
 
-      flightsStorage.insert(flight.id, updatedFlight);
+      courseStorage.insert(course.id, updatedcourse);
       persistedBookings.insert(ic.caller(), updatedBooking);
       return Ok(updatedBooking);
     }
@@ -327,31 +358,31 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
   // complete room reservation
   endReservation: update([text], Result(Message, Message), async (id) => {
     // get room
-    const flightOpt = flightsStorage.get(id);
-    if ("None" in flightOpt) {
-      return Err({ NotFound: `flight with id=${id} not found` });
+    const courseOpt = courseStorage.get(id);
+    if ("None" in courseOpt) {
+      return Err({ NotFound: `course with id=${id} not found` });
     }
 
-    const flight = flightOpt.Some;
+    const course = courseOpt.Some;
 
-    if (!flight.isReserved) {
-      return Err({ NotBooked: "flight is not reserved" });
+    if (!course.isReserved) {
+      return Err({ NotBooked: "course is not reserved" });
     }
 
-    if ("None" in flight.currentReservationEnds) {
+    if ("None" in course.currentReservationEnds) {
       return Err({ NotBooked: "reservation time not set" });
     }
 
-    if (flight.currentReservationEnds.Some > ic.time()) {
+    if (course.currentReservationEnds.Some > ic.time()) {
       return Err({ Booked: "booking time not yet over" });
     }
 
-    if ("None" in flight.currentReservedTo) {
-      return Err({ NotBooked: "flight not reserved to anyone" });
+    if ("None" in course.currentReservedTo) {
+      return Err({ NotBooked: "course not reserved to anyone" });
     }
 
-    if (flight.currentReservedTo.Some.toString() !== ic.caller().toString()) {
-      return Err({ Booked: "only booker of flight can unbook" });
+    if (course.currentReservedTo.Some.toString() !== ic.caller().toString()) {
+      return Err({ Booked: "only booker of course can unbook" });
     }
 
     // check reservation fee is set
@@ -368,14 +399,14 @@ getFlightByPlace: query([text, text], Result(Vec(Flight), Message), (departurePl
     }
 
     // get updated record
-    const updatedFlight = {
-      ...flight,
+    const updatedcourse = {
+      ...course,
       currentReservedTo: None,
       isReserved: false,
       currentReservationEnds: None,
     };
 
-    flightsStorage.insert(flight.id, updatedFlight);
+    courseStorage.insert(course.id, updatedcourse);
 
     return result;
   }),
